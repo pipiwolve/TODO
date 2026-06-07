@@ -5,6 +5,50 @@ import Testing
 
 @Suite("Todo core persistence and planning")
 struct TodoCoreTests {
+    @Test("timeline window can shift between this week and previous week")
+    func timelineWindowCanShiftBetweenThisWeekAndPreviousWeek() {
+        let today = DateOnly(year: 2026, month: 6, day: 8)
+        var window = TimelineWindow(today: today)
+
+        #expect(window.anchor == today)
+        #expect(window.canMoveBackward)
+        #expect(!window.canMoveForward)
+
+        window.moveBackward()
+
+        #expect(window.anchor == DateOnly(year: 2026, month: 6, day: 1))
+        #expect(!window.canMoveBackward)
+        #expect(window.canMoveForward)
+
+        window.moveBackward()
+        #expect(window.anchor == DateOnly(year: 2026, month: 6, day: 1))
+
+        window.moveForward()
+        #expect(window.anchor == today)
+    }
+
+    @Test("cross-week project appears in each visible timeline window")
+    func crossWeekProjectAppearsInEachVisibleTimelineWindow() throws {
+        let store = try TodoStore(path: temporaryDatabasePath())
+        let today = DateOnly(year: 2026, month: 6, day: 8)
+        let lastWeek = today.addingDays(-7)
+        let projectName = "Release Work"
+        _ = try store.addTask(title: "Finish last-week prep", date: lastWeek, priority: .high, source: .manual, projectName: projectName)
+        _ = try store.addTask(title: "Ship this-week follow-up", date: today, priority: .medium, source: .manual, projectName: projectName)
+
+        let previousWeekEntries = try store.timelineEntries(scope: .week, anchor: lastWeek)
+        let currentWeekEntries = try store.timelineEntries(scope: .week, anchor: today)
+        let previousWeekTasks = try store.timelineTasks(scope: .week, anchor: lastWeek)
+        let currentWeekTasks = try store.timelineTasks(scope: .week, anchor: today)
+
+        #expect(previousWeekEntries.contains { $0.projectName == projectName && $0.date == lastWeek && $0.taskCount == 1 })
+        #expect(!previousWeekEntries.contains { $0.projectName == projectName && $0.date == today })
+        #expect(currentWeekEntries.contains { $0.projectName == projectName && $0.date == today && $0.taskCount == 1 })
+        #expect(!currentWeekEntries.contains { $0.projectName == projectName && $0.date == lastWeek })
+        #expect(previousWeekTasks.map(\.title) == ["Finish last-week prep"])
+        #expect(currentWeekTasks.map(\.title) == ["Ship this-week follow-up"])
+    }
+
     @Test("manual tasks persist and can be deleted")
     func manualTasksPersistAndDelete() async throws {
         let store = try TodoStore(path: temporaryDatabasePath())
