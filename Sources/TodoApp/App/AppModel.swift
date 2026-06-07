@@ -10,6 +10,7 @@ final class AppModel {
     var today: DateOnly
     var tasks: [TodoTask] = []
     var timeline: [TimelineEntry] = []
+    var timelineTasks: [TodoTask] = []
     var overdueTasks: [TodoTask] = []
     var projects: [Project] = []
     var archivedProjects: [Project] = []
@@ -71,6 +72,7 @@ final class AppModel {
         do {
             tasks = try store.tasks(on: today)
             timeline = try store.timelineEntries(scope: .week, anchor: today)
+            timelineTasks = try store.timelineTasks(scope: .week, anchor: today)
             overdueTasks = try store.overdueTasks(before: today)
             projects = try store.projects()
             archivedProjects = try store.archivedProjects()
@@ -138,6 +140,48 @@ final class AppModel {
         } catch {
             showToast("Update failed")
             statusMessage = "Update failed: \(error.localizedDescription)"
+        }
+    }
+
+    func tasks(forProject projectName: String, on date: DateOnly) -> [TodoTask] {
+        timelineTasks.filter { ($0.projectName ?? "Inbox") == projectName && $0.date == date }
+    }
+
+    func moveTask(_ task: TodoTask, to date: DateOnly) {
+        guard task.date != date else { return }
+        do {
+            try store.moveTask(id: task.id, to: date)
+            showToast("Date updated")
+            refresh()
+        } catch {
+            showToast("Date failed")
+            statusMessage = "Date failed: \(error.localizedDescription)"
+            refresh()
+        }
+    }
+
+    func renameProject(from oldName: String, to newName: String) {
+        let cleanName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanName.isEmpty else {
+            showToast("Rename failed")
+            statusMessage = "Project name is empty"
+            return
+        }
+        guard oldName != cleanName else { return }
+        do {
+            try store.renameProject(from: oldName, to: cleanName)
+            if draftProjectName == oldName {
+                draftProjectName = cleanName
+            }
+            if selectedArchivedProjectName == oldName {
+                selectedArchivedProjectName = cleanName
+            }
+            showToast("Project renamed")
+            refresh()
+        } catch {
+            showToast("Rename failed")
+            statusMessage = "Rename failed: \(error.localizedDescription)"
+            refresh()
         }
     }
 

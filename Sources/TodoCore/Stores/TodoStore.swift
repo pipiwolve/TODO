@@ -43,6 +43,7 @@ public final class TodoStore: @unchecked Sendable {
 
     public func addTask(title: String, date: DateOnly, priority: TaskPriority, source: TaskSource, projectName: String?, dueTime: String? = nil) throws -> TodoTask {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanProjectName = try projectName?.nilIfBlank ?? inboxProjectName()
         let now = Date()
         let task = TodoTask(
             id: UUID(),
@@ -51,7 +52,7 @@ public final class TodoStore: @unchecked Sendable {
             isCompleted: false,
             priority: priority,
             source: source,
-            projectName: projectName?.nilIfBlank,
+            projectName: cleanProjectName,
             dueTime: dueTime?.normalizedDueTime,
             createdAt: now,
             updatedAt: now
@@ -166,6 +167,42 @@ public final class TodoStore: @unchecked Sendable {
         }
     }
 
+    public func renameProject(from oldName: String, to newName: String) throws {
+        let cleanOldName = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanNewName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanOldName.isEmpty, !cleanNewName.isEmpty else {
+            throw Error.executeFailed("Project name is empty")
+        }
+        guard cleanOldName != cleanNewName else { return }
+
+        try execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try withStatement("UPDATE projects SET name = ? WHERE name = ?") { statement in
+                bind(cleanNewName, to: 1, in: statement)
+                bind(cleanOldName, to: 2, in: statement)
+                try stepDone(statement)
+            }
+            try withStatement("UPDATE tasks SET project_name = ?, updated_at = ? WHERE COALESCE(project_name, 'Inbox') = ?") { statement in
+                bind(cleanNewName, to: 1, in: statement)
+                bind(Date().timeIntervalSince1970, to: 2, in: statement)
+                bind(cleanOldName, to: 3, in: statement)
+                try stepDone(statement)
+            }
+            try withStatement("UPDATE project_archive_summaries SET project_name = ? WHERE project_name = ?") { statement in
+                bind(cleanNewName, to: 1, in: statement)
+                bind(cleanOldName, to: 2, in: statement)
+                try stepDone(statement)
+            }
+            if try inboxProjectName() == cleanOldName {
+                try setInboxProjectName(cleanNewName)
+            }
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
     public func projectArchiveDetail(name: String) throws -> ProjectArchiveDetail? {
         guard let project = try project(named: name) else {
             return nil
@@ -248,6 +285,25 @@ public final class TodoStore: @unchecked Sendable {
         }
     }
 
+    public func tasks(forProjectNamed name: String, on date: DateOnly) throws -> [TodoTask] {
+        try queryTasks(
+            sql: "SELECT id, title, date, is_completed, priority, source, project_name, due_time, created_at, updated_at FROM tasks WHERE COALESCE(project_name, 'Inbox') = ? AND date = ? ORDER BY COALESCE(due_time, '99:99') ASC, created_at ASC",
+            bindings: { statement in
+                bind(name, to: 1, in: statement)
+                bind(date.isoString, to: 2, in: statement)
+            }
+        )
+    }
+
+    public func moveTask(id: UUID, to date: DateOnly) throws {
+        try withStatement("UPDATE tasks SET date = ?, updated_at = ? WHERE id = ?") { statement in
+            bind(date.isoString, to: 1, in: statement)
+            bind(Date().timeIntervalSince1970, to: 2, in: statement)
+            bind(id.uuidString, to: 3, in: statement)
+            try stepDone(statement)
+        }
+    }
+
     public func updateTaskMetadata(id: UUID, projectName: String?, priority: TaskPriority, dueTime: String?) throws {
         let cleanProject = projectName?.nilIfBlank
         try ensureProject(named: cleanProject)
@@ -303,7 +359,7 @@ public final class TodoStore: @unchecked Sendable {
             FROM tasks
             LEFT JOIN projects ON projects.name = COALESCE(project_name, 'Inbox')
             WHERE date >= ? AND date <= ?
-              AND (projects.name IS NULL OR projects.is_active = 1)
+              AND (tasks.project_name IS NULL OR projects.name IS NULL OR projects.is_active = 1)
             GROUP BY project_name, date
             ORDER BY date ASC, project_name ASC
             """
@@ -330,6 +386,25 @@ public final class TodoStore: @unchecked Sendable {
         }
 
         return entries
+    }
+
+    public func timelineTasks(scope: TimelineScope, anchor: DateOnly) throws -> [TodoTask] {
+        let days = scope == .week ? 7 : 31
+        let end = anchor.addingDays(days - 1)
+        return try queryTasks(
+            sql: """
+            SELECT tasks.id, title, date, is_completed, priority, source, project_name, due_time, created_at, updated_at
+            FROM tasks
+            LEFT JOIN projects ON projects.name = COALESCE(project_name, 'Inbox')
+            WHERE date >= ? AND date <= ?
+              AND (tasks.project_name IS NULL OR projects.name IS NULL OR projects.is_active = 1)
+            ORDER BY date ASC, COALESCE(due_time, '99:99') ASC, created_at ASC
+            """,
+            bindings: { statement in
+                bind(anchor.isoString, to: 1, in: statement)
+                bind(end.isoString, to: 2, in: statement)
+            }
+        )
     }
 
     public func saveDailyNote(_ note: DailyNote) throws {
@@ -370,6 +445,14 @@ public final class TodoStore: @unchecked Sendable {
     }
 
     private func migrate() throws {
+        try execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            """
+        )
         try execute(
             """
             CREATE TABLE IF NOT EXISTS projects (
@@ -433,8 +516,7 @@ public final class TodoStore: @unchecked Sendable {
             );
             """
         )
-        try ensureProject(named: "个人工作")
-        try ensureProject(named: "Inbox")
+        try ensureDefaultProjectsIfNeeded()
     }
 
     private func project(named name: String) throws -> Project? {
@@ -528,6 +610,47 @@ public final class TodoStore: @unchecked Sendable {
             bind(UUID().uuidString, to: 1, in: statement)
             bind(projectName, to: 2, in: statement)
             bind(ProjectColor.paletteColor(for: projectName), to: 3, in: statement)
+            try stepDone(statement)
+        }
+    }
+
+    private func ensureDefaultProjectsIfNeeded() throws {
+        var projectCount = 0
+        try withStatement("SELECT COUNT(*) FROM projects") { statement in
+            if sqlite3_step(statement) == SQLITE_ROW {
+                projectCount = Int(sqlite3_column_int(statement, 0))
+            }
+        }
+        guard projectCount == 0 else { return }
+        try ensureProject(named: "个人工作")
+        try ensureProject(named: "Inbox")
+        try setInboxProjectName("Inbox")
+    }
+
+    private func inboxProjectName() throws -> String {
+        var name: String?
+        try withStatement("SELECT value FROM app_settings WHERE key = ?") { statement in
+            bind("inbox_project_name", to: 1, in: statement)
+            if sqlite3_step(statement) == SQLITE_ROW {
+                name = columnString(statement, 0)
+            }
+        }
+        if let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return name
+        }
+        return "Inbox"
+    }
+
+    private func setInboxProjectName(_ name: String) throws {
+        try withStatement(
+            """
+            INSERT INTO app_settings (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """
+        ) { statement in
+            bind("inbox_project_name", to: 1, in: statement)
+            bind(name, to: 2, in: statement)
             try stepDone(statement)
         }
     }

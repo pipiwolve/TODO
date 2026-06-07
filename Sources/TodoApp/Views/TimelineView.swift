@@ -1,5 +1,6 @@
 import SwiftUI
 import TodoCore
+import UniformTypeIdentifiers
 
 struct TimelineView: View {
     @Bindable var model: AppModel
@@ -39,7 +40,17 @@ struct TimelineView: View {
                 ContentUnavailableView("No timeline yet", systemImage: "calendar", description: Text("AI-planned or manual tasks will appear here."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                GanttGrid(entries: model.timeline, anchor: model.today, onArchive: model.archiveProject, onDelete: model.deleteProject)
+                GanttGrid(
+                    entries: model.timeline,
+                    anchor: model.today,
+                    timelineTasks: model.timelineTasks,
+                    tasksForCell: model.tasks(forProject:on:),
+                    onMoveTask: model.moveTask(_:to:),
+                    onToggleTask: model.toggle(_:),
+                    onRenameProject: model.renameProject(from:to:),
+                    onArchive: model.archiveProject,
+                    onDelete: model.deleteProject
+                )
             }
 
             OverdueAlertsView(model: model)
@@ -465,6 +476,11 @@ private struct OverdueAlertsView: View {
 private struct GanttGrid: View {
     let entries: [TimelineEntry]
     let anchor: DateOnly
+    let timelineTasks: [TodoTask]
+    let tasksForCell: (String, DateOnly) -> [TodoTask]
+    let onMoveTask: (TodoTask, DateOnly) -> Void
+    let onToggleTask: (TodoTask) -> Void
+    let onRenameProject: (String, String) -> Void
     let onArchive: (String) -> Void
     let onDelete: (String) -> Void
 
@@ -473,7 +489,7 @@ private struct GanttGrid: View {
     }
 
     private var projects: [String] {
-        Array(Set(entries.map(\.projectName))).sorted()
+        Array(Set(entries.map(\.projectName) + timelineTasks.map { $0.projectName ?? "Inbox" })).sorted()
     }
 
     var body: some View {
@@ -494,7 +510,18 @@ private struct GanttGrid: View {
             ScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(projects, id: \.self) { project in
-                        ProjectGanttRow(project: project, days: days, entry: entry(project:day:), onArchive: onArchive, onDelete: onDelete)
+                        ProjectGanttRow(
+                            project: project,
+                            days: days,
+                            allTasks: timelineTasks,
+                            entry: entry(project:day:),
+                            tasksForCell: tasksForCell,
+                            onMoveTask: onMoveTask,
+                            onToggleTask: onToggleTask,
+                            onRenameProject: onRenameProject,
+                            onArchive: onArchive,
+                            onDelete: onDelete
+                        )
                     }
                 }
             }
@@ -516,39 +543,22 @@ private struct GanttGrid: View {
 private struct ProjectGanttRow: View {
     let project: String
     let days: [DateOnly]
+    let allTasks: [TodoTask]
     let entry: (String, DateOnly) -> TimelineEntry?
+    let tasksForCell: (String, DateOnly) -> [TodoTask]
+    let onMoveTask: (TodoTask, DateOnly) -> Void
+    let onToggleTask: (TodoTask) -> Void
+    let onRenameProject: (String, String) -> Void
     let onArchive: (String) -> Void
     let onDelete: (String) -> Void
     @State private var isHovering = false
+    @State private var isRenaming = false
+    @State private var draftName = ""
     @State private var showsDeleteConfirmation = false
 
     var body: some View {
         HStack(spacing: 8) {
-            HStack(spacing: 4) {
-                Text(project)
-                    .font(.callout.weight(.medium))
-                    .lineLimit(1)
-                if isHovering {
-                    Button {
-                        onArchive(project)
-                    } label: {
-                        Image(systemName: "archivebox")
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
-                    .help("Archive project")
-                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
-                    Button {
-                        showsDeleteConfirmation = true
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.red)
-                    .help("Delete project")
-                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
-                }
-            }
+            projectHeader
             .frame(width: 130, alignment: .leading)
             .onHover { isHovering = $0 }
             .animation(.snappy(duration: 0.16), value: isHovering)
@@ -566,39 +576,272 @@ private struct ProjectGanttRow: View {
             }
 
             ForEach(days, id: \.self) { day in
-                GanttCell(entry: entry(project, day))
+                GanttCell(
+                    project: project,
+                    day: day,
+                    entry: entry(project, day),
+                    tasks: tasksForCell(project, day),
+                    allTasks: allTasks,
+                    onMoveTask: onMoveTask,
+                    onToggleTask: onToggleTask
+                )
             }
         }
+        .onChange(of: project) { _, newValue in
+            if !isRenaming {
+                draftName = newValue
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var projectHeader: some View {
+        if isRenaming {
+            HStack(spacing: 4) {
+                TextField("Project", text: $draftName)
+                    .textFieldStyle(.plain)
+                    .font(.callout.weight(.medium))
+                    .onSubmit(saveRename)
+
+                Button(action: saveRename) {
+                    Image(systemName: "checkmark")
+                }
+                .buttonStyle(.borderless)
+                .help("Save project name")
+
+                Button {
+                    draftName = project
+                    isRenaming = false
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Cancel")
+            }
+            .onAppear {
+                if draftName.isEmpty {
+                    draftName = project
+                }
+            }
+        } else {
+            HStack(spacing: 4) {
+                Text(project)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+
+                if isHovering {
+                    Button {
+                        draftName = project
+                        isRenaming = true
+                    } label: {
+                        Image(systemName: "pencil")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Rename project")
+                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
+
+                    Button {
+                        onArchive(project)
+                    } label: {
+                        Image(systemName: "archivebox")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Archive project")
+                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
+
+                    Button {
+                        showsDeleteConfirmation = true
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.red)
+                    .help("Delete project")
+                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                }
+            }
+        }
+    }
+
+    private func saveRename() {
+        let cleanName = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanName.isEmpty else { return }
+        onRenameProject(project, cleanName)
+        isRenaming = false
     }
 }
 
 private struct GanttCell: View {
+    let project: String
+    let day: DateOnly
     let entry: TimelineEntry?
+    let tasks: [TodoTask]
+    let allTasks: [TodoTask]
+    let onMoveTask: (TodoTask, DateOnly) -> Void
+    let onToggleTask: (TodoTask) -> Void
+    @State private var showsTasks = false
+    @State private var isDropTargeted = false
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 5)
-                .fill(.quaternary.opacity(0.5))
-                .frame(height: 30)
-
-            if let entry {
+        Button {
+            if !tasks.isEmpty {
+                showsTasks.toggle()
+            }
+        } label: {
+            ZStack {
                 RoundedRectangle(cornerRadius: 5)
-                    .fill(.blue.opacity(0.28))
-                    .overlay(alignment: .leading) {
-                        GeometryReader { proxy in
-                            let progress = CGFloat(entry.completedCount) / CGFloat(max(entry.taskCount, 1))
-                            RoundedRectangle(cornerRadius: 5)
-                                .fill(.blue.opacity(0.52))
-                                .frame(width: max(8, proxy.size.width * progress))
+                    .fill(isDropTargeted ? Color.blue.opacity(0.18) : Color.secondary.opacity(0.10))
+                    .frame(height: 30)
+
+                if let entry {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(.blue.opacity(isDropTargeted ? 0.36 : 0.28))
+                        .overlay(alignment: .leading) {
+                            GeometryReader { proxy in
+                                let progress = CGFloat(entry.completedCount) / CGFloat(max(entry.taskCount, 1))
+                                RoundedRectangle(cornerRadius: 5)
+                                    .fill(.blue.opacity(0.52))
+                                    .frame(width: max(8, proxy.size.width * progress))
+                            }
                         }
-                    }
-                Text("\(entry.taskCount)")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    Text("\(entry.taskCount)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.primary)
+                } else if isDropTargeted {
+                    Image(systemName: "arrow.down.to.line.compact")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.blue)
+                }
             }
         }
+        .buttonStyle(.plain)
         .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
         .help(entry.map { "\($0.projectName): \($0.completedCount)/\($0.taskCount) complete" } ?? "No tasks")
+        .popover(isPresented: $showsTasks, arrowEdge: .bottom) {
+            GanttTaskPopover(project: project, day: day, tasks: tasks, onToggleTask: onToggleTask)
+        }
+        .onDrop(of: [UTType.text], isTargeted: $isDropTargeted) { providers in
+            handleDrop(providers)
+        }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else {
+            return false
+        }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let idString = object as? String, let id = UUID(uuidString: idString), let task = allTasks.first(where: { $0.id == id }) else {
+                return
+            }
+
+            Task { @MainActor in
+                onMoveTask(task, day)
+            }
+        }
+        return true
+    }
+}
+
+private struct GanttTaskPopover: View {
+    let project: String
+    let day: DateOnly
+    let tasks: [TodoTask]
+    let onToggleTask: (TodoTask) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text("\(day.isoString) · \(tasks.count) todos")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            LazyVStack(alignment: .leading, spacing: 7) {
+                ForEach(tasks) { task in
+                    GanttTaskRow(task: task, onToggle: { onToggleTask(task) })
+                }
+            }
+        }
+        .padding(12)
+        .frame(width: 300)
+    }
+}
+
+private struct GanttTaskRow: View {
+    let task: TodoTask
+    let onToggle: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Button(action: onToggle) {
+                Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(task.isCompleted ? .green : .secondary)
+                    .frame(width: 14)
+            }
+            .buttonStyle(.borderless)
+            .help(task.isCompleted ? "Mark incomplete" : "Mark complete")
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(task.title)
+                    .font(.callout.weight(.medium))
+                    .strikethrough(task.isCompleted)
+                    .lineLimit(3)
+
+                HStack(spacing: 7) {
+                    if let dueTime = task.dueTime {
+                        Label(dueTime, systemImage: "clock")
+                    }
+                    Label(task.priority.ganttDisplayName, systemImage: task.priority.ganttSystemImage)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 4)
+            Image(systemName: "arrow.left.and.right")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .help("Drag to another date")
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .onDrag {
+            NSItemProvider(object: task.id.uuidString as NSString)
+        }
+    }
+}
+
+private extension TaskPriority {
+    var ganttDisplayName: String {
+        switch self {
+        case .low:
+            "Low"
+        case .medium:
+            "Medium"
+        case .high:
+            "High"
+        }
+    }
+
+    var ganttSystemImage: String {
+        switch self {
+        case .low:
+            "flag"
+        case .medium:
+            "flag.fill"
+        case .high:
+            "flag.2.crossed.fill"
+        }
     }
 }
 

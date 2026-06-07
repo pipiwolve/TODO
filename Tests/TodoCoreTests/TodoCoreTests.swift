@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import TodoCore
 
@@ -238,6 +239,178 @@ struct TodoCoreTests {
         #expect(updated.dueTime == "08:45")
     }
 
+    @Test("projects can be renamed with tasks and archive summaries")
+    func projectsCanBeRenamedWithTasksAndArchiveSummaries() throws {
+        let store = try TodoStore(path: temporaryDatabasePath())
+        _ = try store.addProject(name: "Client Work")
+        _ = try store.addTask(
+            title: "Ship report",
+            date: DateOnly(year: 2026, month: 6, day: 7),
+            priority: .high,
+            source: .manual,
+            projectName: "Client Work"
+        )
+        try store.archiveProject(name: "Client Work")
+        try store.saveProjectArchiveSummary(
+            ProjectArchiveSummary(
+                projectName: "Client Work",
+                summary: "Finished client work.",
+                outcomes: ["Report shipped"],
+                risks: [],
+                nextSteps: ["Send follow-up"],
+                generatedAt: Date(timeIntervalSince1970: 100)
+            )
+        )
+
+        try store.renameProject(from: "Client Work", to: "Renamed Client")
+
+        #expect(try !store.archivedProjects().contains { $0.name == "Client Work" })
+        #expect(try store.archivedProjects().contains { $0.name == "Renamed Client" })
+        let renamedTask = try #require(store.tasks(on: DateOnly(year: 2026, month: 6, day: 7)).first)
+        #expect(renamedTask.projectName == "Renamed Client")
+        #expect(try store.projectArchiveDetail(name: "Client Work") == nil)
+        let renamedDetail = try #require(try store.projectArchiveDetail(name: "Renamed Client"))
+        #expect(renamedDetail.summary?.summary == "Finished client work.")
+        #expect(renamedDetail.summary?.nextSteps == ["Send follow-up"])
+    }
+
+    @Test("default projects can be renamed")
+    func defaultProjectsCanBeRenamed() throws {
+        let path = temporaryDatabasePath()
+        var store: TodoStore? = try TodoStore(path: path)
+        let openedStore = try #require(store)
+        _ = try openedStore.addTask(
+            title: "Default task",
+            date: DateOnly(year: 2026, month: 6, day: 7),
+            priority: .medium,
+            source: .manual,
+            projectName: "Inbox"
+        )
+
+        try openedStore.renameProject(from: "Inbox", to: "收件箱")
+
+        #expect(try !openedStore.projects().contains { $0.name == "Inbox" })
+        #expect(try openedStore.projects().contains { $0.name == "收件箱" })
+        let task = try #require(openedStore.tasks(on: DateOnly(year: 2026, month: 6, day: 7)).first)
+        #expect(task.projectName == "收件箱")
+
+        store = nil
+        let reopenedStore = try TodoStore(path: path)
+        #expect(try !reopenedStore.projects().contains { $0.name == "Inbox" })
+        #expect(try reopenedStore.projects().contains { $0.name == "收件箱" })
+
+        _ = try reopenedStore.addTask(
+            title: "Future inbox task",
+            date: DateOnly(year: 2026, month: 6, day: 8),
+            priority: .low,
+            source: .ai,
+            projectName: nil
+        )
+
+        let futureTask = try #require(reopenedStore.tasks(on: DateOnly(year: 2026, month: 6, day: 8)).first)
+        #expect(futureTask.projectName == "收件箱")
+        let futureEntries = try reopenedStore.timelineEntries(scope: .week, anchor: DateOnly(year: 2026, month: 6, day: 8))
+        #expect(futureEntries.contains { $0.projectName == "收件箱" })
+        #expect(!futureEntries.contains { $0.projectName == "Inbox" })
+    }
+
+    @Test("project rename rejects blank and duplicate names")
+    func projectRenameRejectsBlankAndDuplicateNames() throws {
+        let store = try TodoStore(path: temporaryDatabasePath())
+        _ = try store.addProject(name: "Client Work")
+        _ = try store.addProject(name: "Other Work")
+
+        #expect(throws: TodoStore.Error.self) {
+            try store.renameProject(from: "Client Work", to: "   ")
+        }
+        #expect(throws: TodoStore.Error.self) {
+            try store.renameProject(from: "Client Work", to: "Other Work")
+        }
+        #expect(try store.projects().contains { $0.name == "Client Work" })
+        #expect(try store.projects().contains { $0.name == "Other Work" })
+    }
+
+    @Test("tasks can be moved between dates and timeline updates")
+    func tasksCanBeMovedBetweenDatesAndTimelineUpdates() throws {
+        let store = try TodoStore(path: temporaryDatabasePath())
+        let sourceDate = DateOnly(year: 2026, month: 6, day: 8)
+        let targetDate = DateOnly(year: 2026, month: 6, day: 7)
+        let task = try store.addTask(
+            title: "Correct misplaced todo",
+            date: sourceDate,
+            priority: .medium,
+            source: .ai,
+            projectName: "Todo App",
+            dueTime: "10:30"
+        )
+
+        try store.moveTask(id: task.id, to: targetDate)
+
+        #expect(try store.tasks(on: sourceDate).isEmpty)
+        let moved = try #require(store.tasks(on: targetDate).first)
+        #expect(moved.id == task.id)
+        #expect(moved.date == targetDate)
+        #expect(moved.projectName == "Todo App")
+        #expect(moved.dueTime == "10:30")
+        let entries = try store.timelineEntries(scope: .week, anchor: targetDate)
+        #expect(entries.contains { $0.projectName == "Todo App" && $0.date == targetDate && $0.taskCount == 1 })
+        #expect(!entries.contains { $0.projectName == "Todo App" && $0.date == sourceDate })
+    }
+
+    @Test("legacy inbox tasks remain visible when Inbox project is inactive")
+    func legacyInboxTasksRemainVisibleWhenInboxProjectIsInactive() throws {
+        let path = temporaryDatabasePath()
+        let date = DateOnly(year: 2026, month: 6, day: 8)
+        let taskID: UUID
+        do {
+            let setupStore = try TodoStore(path: path)
+            let task = try setupStore.addTask(
+                title: "Legacy inbox task",
+                date: date,
+                priority: .medium,
+                source: .manual,
+                projectName: "Inbox"
+            )
+            taskID = task.id
+        }
+        try setTaskProjectNameToNull(path: path, id: taskID)
+        let store = try TodoStore(path: path)
+        try store.archiveProject(name: "Inbox")
+
+        let entries = try store.timelineEntries(scope: .week, anchor: date)
+        let timelineTasks = try store.timelineTasks(scope: .week, anchor: date)
+
+        #expect(entries.contains { $0.projectName == "Inbox" && $0.date == date && $0.taskCount == 1 })
+        #expect(timelineTasks.contains { $0.id == taskID && $0.projectName == nil })
+    }
+
+    @Test("timeline tasks hide archived non-inbox projects")
+    func timelineTasksHideArchivedNonInboxProjects() throws {
+        let store = try TodoStore(path: temporaryDatabasePath())
+        let date = DateOnly(year: 2026, month: 6, day: 8)
+        let archivedTask = try store.addTask(
+            title: "Archived work",
+            date: date,
+            priority: .medium,
+            source: .manual,
+            projectName: "Archived Project"
+        )
+        let activeTask = try store.addTask(
+            title: "Active work",
+            date: date,
+            priority: .medium,
+            source: .manual,
+            projectName: "Active Project"
+        )
+
+        try store.archiveProject(name: "Archived Project")
+
+        let timelineTasks = try store.timelineTasks(scope: .week, anchor: date)
+
+        #expect(!timelineTasks.contains { $0.id == archivedTask.id })
+        #expect(timelineTasks.contains { $0.id == activeTask.id })
+    }
+
     @Test("AI planning result is inserted as tasks and timeline snapshots")
     func planningResultIsInserted() async throws {
         let store = try TodoStore(path: temporaryDatabasePath())
@@ -343,5 +516,21 @@ struct TodoCoreTests {
     private func temporaryDatabasePath() -> String {
         let name = UUID().uuidString + ".sqlite"
         return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(name).path
+    }
+
+    private func setTaskProjectNameToNull(path: String, id: UUID) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open(path, &db) == SQLITE_OK else {
+            throw TodoStore.Error.openFailed("Could not open test database")
+        }
+        defer { sqlite3_close(db) }
+
+        var error: UnsafeMutablePointer<CChar>?
+        let sql = "UPDATE tasks SET project_name = NULL WHERE id = '\(id.uuidString)'"
+        guard sqlite3_exec(db, sql, nil, nil, &error) == SQLITE_OK else {
+            let message = error.map { String(cString: $0) } ?? "Could not set project name to NULL"
+            sqlite3_free(error)
+            throw TodoStore.Error.executeFailed(message)
+        }
     }
 }
