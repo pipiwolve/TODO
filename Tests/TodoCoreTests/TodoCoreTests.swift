@@ -71,6 +71,58 @@ struct TodoCoreTests {
         #expect(try store.tasks(on: DateOnly(year: 2026, month: 6, day: 7)).contains { $0.projectName == "Client Work" })
     }
 
+    @Test("projects can be deleted with their tasks and archive summaries")
+    func projectsCanBeDeletedWithTheirTasksAndArchiveSummaries() throws {
+        let store = try TodoStore(path: temporaryDatabasePath())
+        _ = try store.addProject(name: "Client Work")
+        _ = try store.addTask(
+            title: "Ship report",
+            date: DateOnly(year: 2026, month: 6, day: 7),
+            priority: .high,
+            source: .manual,
+            projectName: "Client Work"
+        )
+        _ = try store.addTask(
+            title: "Keep unrelated work",
+            date: DateOnly(year: 2026, month: 6, day: 7),
+            priority: .medium,
+            source: .manual,
+            projectName: "Other Work"
+        )
+        try store.archiveProject(name: "Client Work")
+        try store.saveProjectArchiveSummary(
+            ProjectArchiveSummary(
+                projectName: "Client Work",
+                summary: "Finished client work.",
+                outcomes: ["Report shipped"],
+                risks: [],
+                nextSteps: [],
+                generatedAt: Date(timeIntervalSince1970: 100)
+            )
+        )
+
+        try store.deleteProject(name: "Client Work")
+
+        #expect(try !store.projects().contains { $0.name == "Client Work" })
+        #expect(try !store.archivedProjects().contains { $0.name == "Client Work" })
+        #expect(try store.projectArchiveDetail(name: "Client Work") == nil)
+        #expect(try store.tasks(on: DateOnly(year: 2026, month: 6, day: 7)).map(\.title) == ["Keep unrelated work"])
+    }
+
+    @Test("default projects cannot be deleted")
+    func defaultProjectsCannotBeDeleted() throws {
+        let store = try TodoStore(path: temporaryDatabasePath())
+
+        #expect(throws: TodoStore.Error.self) {
+            try store.deleteProject(name: "Inbox")
+        }
+        #expect(throws: TodoStore.Error.self) {
+            try store.deleteProject(name: "个人工作")
+        }
+        #expect(try store.projects().contains { $0.name == "Inbox" })
+        #expect(try store.projects().contains { $0.name == "个人工作" })
+    }
+
     @Test("archive detail includes project tasks stats and daily notes")
     func archiveDetailIncludesProjectTasksStatsAndDailyNotes() throws {
         let store = try TodoStore(path: temporaryDatabasePath())

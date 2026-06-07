@@ -39,7 +39,7 @@ struct TimelineView: View {
                 ContentUnavailableView("No timeline yet", systemImage: "calendar", description: Text("AI-planned or manual tasks will appear here."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                GanttGrid(entries: model.timeline, anchor: model.today, onArchive: model.archiveProject)
+                GanttGrid(entries: model.timeline, anchor: model.today, onArchive: model.archiveProject, onDelete: model.deleteProject)
             }
 
             OverdueAlertsView(model: model)
@@ -466,6 +466,7 @@ private struct GanttGrid: View {
     let entries: [TimelineEntry]
     let anchor: DateOnly
     let onArchive: (String) -> Void
+    let onDelete: (String) -> Void
 
     private var days: [DateOnly] {
         (0..<7).map { anchor.addingDays($0) }
@@ -493,7 +494,7 @@ private struct GanttGrid: View {
             ScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(projects, id: \.self) { project in
-                        ProjectGanttRow(project: project, days: days, entry: entry(project:day:), onArchive: onArchive)
+                        ProjectGanttRow(project: project, days: days, entry: entry(project:day:), onArchive: onArchive, onDelete: onDelete)
                     }
                 }
             }
@@ -517,7 +518,9 @@ private struct ProjectGanttRow: View {
     let days: [DateOnly]
     let entry: (String, DateOnly) -> TimelineEntry?
     let onArchive: (String) -> Void
+    let onDelete: (String) -> Void
     @State private var isHovering = false
+    @State private var showsDeleteConfirmation = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -535,11 +538,32 @@ private struct ProjectGanttRow: View {
                     .foregroundStyle(.secondary)
                     .help("Archive project")
                     .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                    Button {
+                        showsDeleteConfirmation = true
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.red)
+                    .help("Delete project")
+                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
                 }
             }
             .frame(width: 130, alignment: .leading)
             .onHover { isHovering = $0 }
             .animation(.snappy(duration: 0.16), value: isHovering)
+            .confirmationDialog(
+                "Delete Project?",
+                isPresented: $showsDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    onDelete(project)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will delete the project and all todos under it.")
+            }
 
             ForEach(days, id: \.self) { day in
                 GanttCell(entry: entry(project, day))

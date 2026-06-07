@@ -11,6 +11,7 @@ public final class TodoStore: @unchecked Sendable {
 
     private let db: OpaquePointer?
     private let lock = NSLock()
+    private static let protectedProjectNames: Set<String> = ["Inbox", "个人工作"]
 
     public static func defaultDatabasePath(appName: String = "TodoSticky") throws -> String {
         let base = try FileManager.default.url(
@@ -135,6 +136,33 @@ public final class TodoStore: @unchecked Sendable {
             bind(Date().timeIntervalSince1970, to: 1, in: statement)
             bind(name, to: 2, in: statement)
             try stepDone(statement)
+        }
+    }
+
+    public func deleteProject(name: String) throws {
+        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !Self.protectedProjectNames.contains(cleanName) else {
+            throw Error.executeFailed("Default projects cannot be deleted")
+        }
+
+        try execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try withStatement("DELETE FROM tasks WHERE COALESCE(project_name, 'Inbox') = ?") { statement in
+                bind(cleanName, to: 1, in: statement)
+                try stepDone(statement)
+            }
+            try withStatement("DELETE FROM project_archive_summaries WHERE project_name = ?") { statement in
+                bind(cleanName, to: 1, in: statement)
+                try stepDone(statement)
+            }
+            try withStatement("DELETE FROM projects WHERE name = ?") { statement in
+                bind(cleanName, to: 1, in: statement)
+                try stepDone(statement)
+            }
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
         }
     }
 

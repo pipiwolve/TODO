@@ -243,6 +243,21 @@ final class AppModel {
         }
     }
 
+    func deleteProject(named name: String) {
+        do {
+            try store.deleteProject(name: name)
+            if selectedArchivedProjectName == name {
+                selectedArchivedProjectName = nil
+                selectedArchiveDetail = nil
+            }
+            showToast("Project deleted")
+            refresh()
+        } catch {
+            showToast("Delete failed")
+            statusMessage = "Delete failed: \(error.localizedDescription)"
+        }
+    }
+
     func selectArchivedProject(_ project: Project) {
         selectedArchivedProjectName = project.name
         loadArchiveDetail(named: project.name)
