@@ -8,6 +8,7 @@ final class AppModel {
     static weak var shared: AppModel?
 
     var today: DateOnly
+    var timelineWindow: TimelineWindow
     var tasks: [TodoTask] = []
     var timeline: [TimelineEntry] = []
     var timelineTasks: [TodoTask] = []
@@ -44,6 +45,7 @@ final class AppModel {
         self.archiveSummarizer = archiveSummarizer
         self.vault = vault
         self.today = today
+        self.timelineWindow = TimelineWindow(today: today)
         self.dailyNote = DailyNote(date: today, blockers: "", completedSummary: "", tomorrowPlan: "")
         AppModel.shared = self
         refresh()
@@ -71,8 +73,8 @@ final class AppModel {
     func refresh() {
         do {
             tasks = try store.tasks(on: today)
-            timeline = try store.timelineEntries(scope: .week, anchor: today)
-            timelineTasks = try store.timelineTasks(scope: .week, anchor: today)
+            timeline = try store.timelineEntries(scope: .week, anchor: timelineWindow.anchor)
+            timelineTasks = try store.timelineTasks(scope: .week, anchor: timelineWindow.anchor)
             overdueTasks = try store.overdueTasks(before: today)
             projects = try store.projects()
             archivedProjects = try store.archivedProjects()
@@ -89,6 +91,16 @@ final class AppModel {
         } catch {
             statusMessage = "Refresh failed: \(error.localizedDescription)"
         }
+    }
+
+    func showPreviousTimelineWeek() {
+        timelineWindow.moveBackward()
+        refresh()
+    }
+
+    func showNextTimelineWeek() {
+        timelineWindow.moveForward()
+        refresh()
     }
 
     func addManualTask() {

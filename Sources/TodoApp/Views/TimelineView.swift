@@ -16,6 +16,7 @@ struct TimelineView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                timelineWeekControls
                 Button {
                     model.showAddProject()
                 } label: {
@@ -42,7 +43,7 @@ struct TimelineView: View {
             } else {
                 GanttGrid(
                     entries: model.timeline,
-                    anchor: model.today,
+                    anchor: model.timelineWindow.anchor,
                     timelineTasks: model.timelineTasks,
                     tasksForCell: model.tasks(forProject:on:),
                     onMoveTask: model.moveTask(_:to:),
@@ -57,6 +58,39 @@ struct TimelineView: View {
         }
         .padding(18)
         .frame(minWidth: 680, minHeight: 460)
+    }
+
+    private var timelineWeekControls: some View {
+        HStack(spacing: 4) {
+            Button {
+                model.showPreviousTimelineWeek()
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!model.timelineWindow.canMoveBackward)
+            .help("Show previous week")
+
+            Text(timelineRangeLabel)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 92)
+
+            Button {
+                model.showNextTimelineWeek()
+            } label: {
+                Image(systemName: "chevron.right")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!model.timelineWindow.canMoveForward)
+            .help("Show this week")
+        }
+    }
+
+    private var timelineRangeLabel: String {
+        let start = model.timelineWindow.anchor
+        let end = model.timelineWindow.end
+        return "\(start.month)/\(start.day)-\(end.month)/\(end.day)"
     }
 }
 

@@ -144,6 +144,42 @@ public enum TimelineScope: Sendable {
     case month
 }
 
+public struct TimelineWindow: Hashable, Sendable {
+    public private(set) var today: DateOnly
+    public private(set) var weekOffset: Int
+
+    public init(today: DateOnly, weekOffset: Int = 0) {
+        self.today = today
+        self.weekOffset = min(0, max(-1, weekOffset))
+    }
+
+    public var anchor: DateOnly {
+        today.addingDays(weekOffset * 7)
+    }
+
+    public var end: DateOnly {
+        anchor.addingDays(6)
+    }
+
+    public var canMoveBackward: Bool {
+        weekOffset > -1
+    }
+
+    public var canMoveForward: Bool {
+        weekOffset < 0
+    }
+
+    public mutating func moveBackward() {
+        guard canMoveBackward else { return }
+        weekOffset -= 1
+    }
+
+    public mutating func moveForward() {
+        guard canMoveForward else { return }
+        weekOffset += 1
+    }
+}
+
 public struct TimelineEntry: Identifiable, Hashable, Sendable {
     public var id: String { projectName + ":" + date.isoString }
     public var projectName: String
