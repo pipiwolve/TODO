@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import TodoCore
@@ -28,6 +29,7 @@ final class AppModel {
     var statusMessage = ""
     var isPlanning = false
     var isGeneratingArchiveSummary = false
+    var isCopyingDailyExport = false
     var apiKeyDraft = ""
     var isPinned = true
     var toast: Toast?
@@ -37,12 +39,14 @@ final class AppModel {
     private let store: TodoStore
     private let planner: TodoPlanningService
     private let archiveSummarizer: ProjectArchiveSummarizingService
+    private let dailyExportSummarizer: DailyExportSummarizingService
     private let vault: APIKeyVault
 
-    init(store: TodoStore, planner: TodoPlanningService, archiveSummarizer: ProjectArchiveSummarizingService = DeepSeekArchiveSummarizer(), vault: APIKeyVault, today: DateOnly = .today()) {
+    init(store: TodoStore, planner: TodoPlanningService, archiveSummarizer: ProjectArchiveSummarizingService = DeepSeekArchiveSummarizer(), dailyExportSummarizer: DailyExportSummarizingService = DeepSeekDailyExportSummarizer(), vault: APIKeyVault, today: DateOnly = .today()) {
         self.store = store
         self.planner = planner
         self.archiveSummarizer = archiveSummarizer
+        self.dailyExportSummarizer = dailyExportSummarizer
         self.vault = vault
         self.today = today
         self.timelineWindow = TimelineWindow(today: today)
@@ -59,12 +63,13 @@ final class AppModel {
                 store: TodoStore(path: path),
                 planner: DeepSeekPlanner(),
                 archiveSummarizer: DeepSeekArchiveSummarizer(),
+                dailyExportSummarizer: DeepSeekDailyExportSummarizer(),
                 vault: KeychainAPIKeyVault()
             )
         } catch {
             let fallbackPath = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("todo-sticky-fallback.sqlite").path
             let fallbackStore = try! TodoStore(path: fallbackPath)
-            let model = AppModel(store: fallbackStore, planner: DeepSeekPlanner(), archiveSummarizer: DeepSeekArchiveSummarizer(), vault: InMemoryAPIKeyVault())
+            let model = AppModel(store: fallbackStore, planner: DeepSeekPlanner(), archiveSummarizer: DeepSeekArchiveSummarizer(), dailyExportSummarizer: DeepSeekDailyExportSummarizer(), vault: InMemoryAPIKeyVault())
             model.statusMessage = "Using temporary storage: \(error.localizedDescription)"
             return model
         }
@@ -153,6 +158,58 @@ final class AppModel {
             showToast("Update failed")
             statusMessage = "Update failed: \(error.localizedDescription)"
         }
+    }
+
+    func renameTask(_ task: TodoTask, to title: String) {
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTitle.isEmpty else {
+            showToast("Rename failed")
+            statusMessage = "Task title is empty"
+            return
+        }
+        guard cleanTitle != task.title else { return }
+        do {
+            try store.renameTask(id: task.id, title: cleanTitle)
+            showToast("Renamed")
+            refresh()
+        } catch {
+            showToast("Rename failed")
+            statusMessage = "Rename failed: \(error.localizedDescription)"
+            refresh()
+        }
+    }
+
+    func copyDailyExportToClipboard() async {
+        guard !isCopyingDailyExport else { return }
+
+        isCopyingDailyExport = true
+        defer { isCopyingDailyExport = false }
+
+        let context = DailyExportRenderer.context(date: today, tasks: tasks, projects: projects)
+        var summary = DailyExportRenderer.fallbackSummary(context: context)
+        var usedFallback = true
+
+        do {
+            if let apiKey = try vault.load(), !apiKey.isEmpty {
+                summary = try await dailyExportSummarizer.summarize(context: context, apiKey: apiKey)
+                usedFallback = false
+            } else {
+                statusMessage = "Daily report copied with local summary. Add API key in Settings for AI summary."
+            }
+        } catch {
+            statusMessage = "Daily report copied. AI summary skipped: \(error.localizedDescription)"
+        }
+
+        let report = DailyExportRenderer.markdown(context: context, summary: summary)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard pasteboard.setString(report, forType: .string) else {
+            showToast("Copy failed")
+            statusMessage = "Copy failed: could not write to clipboard"
+            return
+        }
+
+        showToast(usedFallback ? "Copied local report" : "Copied AI report")
     }
 
     func tasks(forProject projectName: String, on date: DateOnly) -> [TodoTask] {

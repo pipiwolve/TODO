@@ -283,6 +283,54 @@ struct TodoCoreTests {
         #expect(updated.dueTime == "08:45")
     }
 
+    @Test("task title rename preserves existing metadata")
+    func taskTitleRenamePreservesExistingMetadata() throws {
+        let store = try TodoStore(path: temporaryDatabasePath())
+        let task = try store.addTask(
+            title: "Generated rough title",
+            date: DateOnly(year: 2026, month: 6, day: 7),
+            priority: .high,
+            source: .ai,
+            projectName: "Client Work",
+            dueTime: "08:45"
+        )
+
+        try store.setTaskCompleted(id: task.id, isCompleted: true)
+        let beforeRename = try #require(store.tasks(on: DateOnly(year: 2026, month: 6, day: 7)).first)
+
+        try store.renameTask(id: task.id, title: "  Send final client report  ")
+
+        let updated = try #require(store.tasks(on: DateOnly(year: 2026, month: 6, day: 7)).first)
+        #expect(updated.id == task.id)
+        #expect(updated.title == "Send final client report")
+        #expect(updated.date == DateOnly(year: 2026, month: 6, day: 7))
+        #expect(updated.isCompleted)
+        #expect(updated.priority == .high)
+        #expect(updated.source == .ai)
+        #expect(updated.projectName == "Client Work")
+        #expect(updated.dueTime == "08:45")
+        #expect(updated.createdAt == beforeRename.createdAt)
+        #expect(updated.updatedAt >= beforeRename.updatedAt)
+    }
+
+    @Test("task title rename rejects blank titles")
+    func taskTitleRenameRejectsBlankTitles() throws {
+        let store = try TodoStore(path: temporaryDatabasePath())
+        let task = try store.addTask(
+            title: "Keep title",
+            date: DateOnly(year: 2026, month: 6, day: 7),
+            priority: .medium,
+            source: .manual,
+            projectName: "个人工作"
+        )
+
+        #expect(throws: TodoStore.Error.self) {
+            try store.renameTask(id: task.id, title: "   ")
+        }
+
+        #expect(try store.tasks(on: DateOnly(year: 2026, month: 6, day: 7)).first?.title == "Keep title")
+    }
+
     @Test("projects can be renamed with tasks and archive summaries")
     func projectsCanBeRenamedWithTasksAndArchiveSummaries() throws {
         let store = try TodoStore(path: temporaryDatabasePath())

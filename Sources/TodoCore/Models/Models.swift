@@ -341,3 +341,78 @@ public struct ProjectArchiveSummaryPayload: Codable, Hashable, Sendable {
         self.nextSteps = nextSteps
     }
 }
+
+public struct DailyExportContext: Codable, Hashable, Sendable {
+    public var date: DateOnly
+    public var projects: [DailyProjectExportContext]
+
+    public init(date: DateOnly, projects: [DailyProjectExportContext]) {
+        self.date = date
+        self.projects = projects
+    }
+}
+
+public struct DailyProjectExportContext: Codable, Hashable, Sendable {
+    public var projectName: String
+    public var totalTaskCount: Int
+    public var completedTaskCount: Int
+    public var incompleteTaskCount: Int
+    public var completedTasks: [DailyExportTask]
+    public var incompleteTasks: [DailyExportTask]
+
+    public init(projectName: String, totalTaskCount: Int, completedTaskCount: Int, incompleteTaskCount: Int, completedTasks: [DailyExportTask], incompleteTasks: [DailyExportTask]) {
+        self.projectName = projectName
+        self.totalTaskCount = totalTaskCount
+        self.completedTaskCount = completedTaskCount
+        self.incompleteTaskCount = incompleteTaskCount
+        self.completedTasks = completedTasks
+        self.incompleteTasks = incompleteTasks
+    }
+
+    public var tasks: [DailyExportTask] {
+        (completedTasks + incompleteTasks).sorted()
+    }
+}
+
+public struct DailyExportTask: Codable, Hashable, Sendable, Comparable {
+    public var title: String
+    public var isCompleted: Bool
+    public var priority: TaskPriority
+    public var dueTime: String?
+
+    public init(title: String, isCompleted: Bool, priority: TaskPriority, dueTime: String?) {
+        self.title = title
+        self.isCompleted = isCompleted
+        self.priority = priority
+        self.dueTime = dueTime
+    }
+
+    public init(task: TodoTask) {
+        self.init(title: task.title, isCompleted: task.isCompleted, priority: task.priority, dueTime: task.dueTime)
+    }
+
+    public static func < (lhs: DailyExportTask, rhs: DailyExportTask) -> Bool {
+        let lhsDueTime = lhs.dueTime ?? "99:99"
+        let rhsDueTime = rhs.dueTime ?? "99:99"
+        if lhsDueTime != rhsDueTime {
+            return lhsDueTime < rhsDueTime
+        }
+        return lhs.title < rhs.title
+    }
+}
+
+public struct DailyExportSummary: Codable, Hashable, Sendable {
+    public var bullets: [String]
+
+    public init(bullets: [String]) {
+        self.bullets = bullets
+    }
+}
+
+public struct DailyExportSummaryPayload: Codable, Hashable, Sendable {
+    public var bullets: [String]
+
+    public init(bullets: [String]) {
+        self.bullets = bullets
+    }
+}

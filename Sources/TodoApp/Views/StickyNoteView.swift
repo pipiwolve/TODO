@@ -82,6 +82,23 @@ struct StickyNoteView: View {
             .help("Open weekly timeline")
 
             Button {
+                Task {
+                    await model.copyDailyExportToClipboard()
+                }
+            } label: {
+                if model.isCopyingDailyExport {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 14, height: 14)
+                } else {
+                    Image(systemName: "doc.on.clipboard")
+                }
+            }
+            .buttonStyle(.borderless)
+            .disabled(model.isCopyingDailyExport)
+            .help("Copy daily report")
+
+            Button {
                 model.showSettings()
             } label: {
                 Image(systemName: "gearshape")
@@ -112,6 +129,9 @@ struct StickyNoteView: View {
                             projects: model.projects,
                             onToggle: { model.toggle(task) },
                             onDelete: { model.delete(task) },
+                            onRename: { title in
+                                model.renameTask(task, to: title)
+                            },
                             onMetadataChange: { projectName, priority, dueTime in
                                 model.updateTaskMetadata(task, projectName: projectName, priority: priority, dueTime: dueTime)
                             }
@@ -406,18 +426,23 @@ private struct TaskRow: View {
     let projects: [Project]
     let onToggle: () -> Void
     let onDelete: () -> Void
+    let onRename: (String) -> Void
     let onMetadataChange: (String?, TaskPriority, String?) -> Void
     @State private var isHovering = false
+    @State private var isRenaming = false
+    @State private var draftTitle: String
     @State private var projectName: String
     @State private var priority: TaskPriority
     @State private var dueTime: String?
 
-    init(task: TodoTask, projects: [Project], onToggle: @escaping () -> Void, onDelete: @escaping () -> Void, onMetadataChange: @escaping (String?, TaskPriority, String?) -> Void) {
+    init(task: TodoTask, projects: [Project], onToggle: @escaping () -> Void, onDelete: @escaping () -> Void, onRename: @escaping (String) -> Void, onMetadataChange: @escaping (String?, TaskPriority, String?) -> Void) {
         self.task = task
         self.projects = projects
         self.onToggle = onToggle
         self.onDelete = onDelete
+        self.onRename = onRename
         self.onMetadataChange = onMetadataChange
+        _draftTitle = State(initialValue: task.title)
         _projectName = State(initialValue: task.projectName ?? "个人工作")
         _priority = State(initialValue: task.priority)
         _dueTime = State(initialValue: task.dueTime)
@@ -433,10 +458,29 @@ private struct TaskRow: View {
             .help(task.isCompleted ? "Mark incomplete" : "Mark complete")
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(task.title)
-                    .font(.body.weight(.semibold))
-                    .strikethrough(task.isCompleted)
-                    .lineLimit(3)
+                if isRenaming {
+                    HStack(spacing: 6) {
+                        TextField("Todo title", text: $draftTitle)
+                            .textFieldStyle(.plain)
+                            .font(.body.weight(.semibold))
+                            .onSubmit(saveRename)
+                        Button(action: saveRename) {
+                            Image(systemName: "checkmark")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Save todo title")
+                        Button(action: cancelRename) {
+                            Image(systemName: "xmark")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Cancel rename")
+                    }
+                } else {
+                    Text(task.title)
+                        .font(.body.weight(.semibold))
+                        .strikethrough(task.isCompleted)
+                        .lineLimit(3)
+                }
                 HStack(spacing: 7) {
                     ProjectWheel(projects: projects, selection: Binding(get: {
                         projectName
@@ -466,23 +510,53 @@ private struct TaskRow: View {
 
             Group {
                 if isHovering {
-                    Button(action: onDelete) {
-                        Image(systemName: "trash")
+                    HStack(spacing: 4) {
+                        Button {
+                            draftTitle = task.title
+                            isRenaming = true
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        .help("Rename todo")
+
+                        Button(action: onDelete) {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        .help("Delete todo")
                     }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
-                    .help("Delete todo")
                     .transition(.opacity.combined(with: .scale(scale: 0.92)))
                 }
             }
-            .frame(width: 18, height: 18)
+            .frame(width: 40, height: 18)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .onHover { isHovering = $0 }
+        .onChange(of: task.title) { _, newValue in
+            if !isRenaming {
+                draftTitle = newValue
+            }
+        }
         .animation(.snappy(duration: 0.16), value: isHovering)
+        .animation(.snappy(duration: 0.16), value: isRenaming)
+    }
+
+    private func saveRename() {
+        let cleanTitle = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTitle.isEmpty else { return }
+        isRenaming = false
+        onRename(cleanTitle)
+    }
+
+    private func cancelRename() {
+        draftTitle = task.title
+        isRenaming = false
     }
 }
 
