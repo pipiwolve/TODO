@@ -304,6 +304,19 @@ public final class TodoStore: @unchecked Sendable {
         }
     }
 
+    public func renameTask(id: UUID, title: String) throws {
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTitle.isEmpty else {
+            throw Error.executeFailed("Task title is empty")
+        }
+        try withStatement("UPDATE tasks SET title = ?, updated_at = ? WHERE id = ?") { statement in
+            bind(cleanTitle, to: 1, in: statement)
+            bind(Date().timeIntervalSince1970, to: 2, in: statement)
+            bind(id.uuidString, to: 3, in: statement)
+            try stepDone(statement)
+        }
+    }
+
     public func updateTaskMetadata(id: UUID, projectName: String?, priority: TaskPriority, dueTime: String?) throws {
         let cleanProject = projectName?.nilIfBlank
         try ensureProject(named: cleanProject)
