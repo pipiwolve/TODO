@@ -154,7 +154,7 @@ public struct TimelineWindow: Hashable, Sendable {
     }
 
     public var anchor: DateOnly {
-        today.addingDays(weekOffset * 7)
+        weekStart.addingDays(weekOffset * 7)
     }
 
     public var end: DateOnly {
@@ -177,6 +177,27 @@ public struct TimelineWindow: Hashable, Sendable {
     public mutating func moveForward() {
         guard canMoveForward else { return }
         weekOffset += 1
+    }
+
+    private var weekStart: DateOnly {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.firstWeekday = 2
+
+        var components = DateComponents()
+        components.calendar = calendar
+        components.year = today.year
+        components.month = today.month
+        components.day = today.day
+
+        guard
+            let date = calendar.date(from: components),
+            let interval = calendar.dateInterval(of: .weekOfYear, for: date)
+        else {
+            return today
+        }
+
+        let start = calendar.dateComponents([.year, .month, .day], from: interval.start)
+        return DateOnly(year: start.year ?? today.year, month: start.month ?? today.month, day: start.day ?? today.day)
     }
 }
 

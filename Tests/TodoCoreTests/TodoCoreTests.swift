@@ -7,10 +7,12 @@ import Testing
 struct TodoCoreTests {
     @Test("timeline window can shift between this week and previous week")
     func timelineWindowCanShiftBetweenThisWeekAndPreviousWeek() {
-        let today = DateOnly(year: 2026, month: 6, day: 8)
+        let today = DateOnly(year: 2026, month: 6, day: 9)
         var window = TimelineWindow(today: today)
+        let currentWeekStart = DateOnly(year: 2026, month: 6, day: 8)
 
-        #expect(window.anchor == today)
+        #expect(window.anchor == currentWeekStart)
+        #expect(window.end == DateOnly(year: 2026, month: 6, day: 14))
         #expect(window.canMoveBackward)
         #expect(!window.canMoveForward)
 
@@ -24,7 +26,18 @@ struct TodoCoreTests {
         #expect(window.anchor == DateOnly(year: 2026, month: 6, day: 1))
 
         window.moveForward()
-        #expect(window.anchor == today)
+        #expect(window.anchor == currentWeekStart)
+    }
+
+    @Test("timeline window treats monday as the start of the visible week")
+    func timelineWindowTreatsMondayAsTheStartOfTheVisibleWeek() {
+        let sunday = TimelineWindow(today: DateOnly(year: 2026, month: 6, day: 14))
+        let monday = TimelineWindow(today: DateOnly(year: 2026, month: 6, day: 15))
+
+        #expect(sunday.anchor == DateOnly(year: 2026, month: 6, day: 8))
+        #expect(sunday.end == DateOnly(year: 2026, month: 6, day: 14))
+        #expect(monday.anchor == DateOnly(year: 2026, month: 6, day: 15))
+        #expect(monday.end == DateOnly(year: 2026, month: 6, day: 21))
     }
 
     @Test("cross-week project appears in each visible timeline window")
