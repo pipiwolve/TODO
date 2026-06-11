@@ -48,6 +48,10 @@ struct TimelineView: View {
                     tasksForCell: model.tasks(forProject:on:),
                     onMoveTask: model.moveTask(_:to:),
                     onToggleTask: model.toggle(_:),
+                    onShowPreviousWeek: model.showPreviousTimelineWeek,
+                    onShowNextWeek: model.showNextTimelineWeek,
+                    canShowPreviousWeek: model.timelineWindow.canMoveBackward,
+                    canShowNextWeek: model.timelineWindow.canMoveForward,
                     onRenameProject: model.renameProject(from:to:),
                     onArchive: model.archiveProject,
                     onDelete: model.deleteProject
@@ -514,9 +518,14 @@ private struct GanttGrid: View {
     let tasksForCell: (String, DateOnly) -> [TodoTask]
     let onMoveTask: (TodoTask, DateOnly) -> Void
     let onToggleTask: (TodoTask) -> Void
+    let onShowPreviousWeek: () -> Void
+    let onShowNextWeek: () -> Void
+    let canShowPreviousWeek: Bool
+    let canShowNextWeek: Bool
     let onRenameProject: (String, String) -> Void
     let onArchive: (String) -> Void
     let onDelete: (String) -> Void
+    @State private var dragOffset: CGFloat = 0
 
     private var days: [DateOnly] {
         (0..<7).map { anchor.addingDays($0) }
@@ -563,6 +572,10 @@ private struct GanttGrid: View {
         .padding(12)
         .background(.thinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .contentShape(Rectangle())
+        .offset(x: dragOffset * 0.12)
+        .animation(.snappy(duration: 0.18), value: dragOffset)
+        .simultaneousGesture(weekNavigationGesture)
     }
 
     private func entry(project: String, day: DateOnly) -> TimelineEntry? {
@@ -571,6 +584,37 @@ private struct GanttGrid: View {
 
     private func shortLabel(for day: DateOnly) -> String {
         "\(day.month)/\(day.day)"
+    }
+
+    private var weekNavigationGesture: some Gesture {
+        DragGesture(minimumDistance: 36)
+            .onChanged { value in
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                dragOffset = constrainedDragOffset(value.translation.width)
+            }
+            .onEnded { value in
+                defer { dragOffset = 0 }
+                guard shouldNavigateWeek(for: value.translation) else { return }
+
+                if value.translation.width > 0 {
+                    guard canShowPreviousWeek else { return }
+                    onShowPreviousWeek()
+                } else {
+                    guard canShowNextWeek else { return }
+                    onShowNextWeek()
+                }
+            }
+    }
+
+    private func shouldNavigateWeek(for translation: CGSize) -> Bool {
+        abs(translation.width) >= 80 && abs(translation.width) > abs(translation.height) * 1.4
+    }
+
+    private func constrainedDragOffset(_ width: CGFloat) -> CGFloat {
+        if width > 0 {
+            return canShowPreviousWeek ? min(width, 160) : min(width, 42)
+        }
+        return canShowNextWeek ? max(width, -160) : max(width, -42)
     }
 }
 
